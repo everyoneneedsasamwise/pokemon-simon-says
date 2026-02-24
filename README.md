@@ -1,36 +1,91 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 🎮 Pokémon Simon Says!
 
-## Getting Started
+A fun, colorful Pokémon-themed Simon Says game designed for 5-year-olds! Built for Bridger.
 
-First, run the development server:
+## 🚀 Live Demo
+
+**Production URL:** https://pokemon-simon-says.vercel.app
+
+## ✨ Features
+
+- **18 Pokémon Actions** - Flex like Machamp, Sleep like Snorlax, Lightning pose like Pikachu, and more!
+- **Voice Commands** - Browser speech synthesis reads out commands
+- **Trick Rounds** - Watch out for commands WITHOUT "Simon says"!
+- **Lives System** - 3 Poké ball lives
+- **Progressive Difficulty** - Speed increases every 5 rounds
+- **Big Colorful UI** - Kid-friendly with huge buttons and bright colors
+- **Animations** - Framer Motion for smooth, fun animations
+- **Confetti** - Celebration on correct answers!
+- **Mobile-Friendly** - Perfect for iPad and phones
+
+## 🎯 How to Play
+
+1. **Listen carefully** to the voice command
+2. **If Simon says it** - Do the action and press "I DID IT! ✅"
+3. **If Simon DOESN'T say it** - Stay still and press "I STAYED STILL! 🚫"
+4. Get it right = +10 points! Get it wrong = lose a life!
+5. Every 5 rounds, the timer gets faster!
+
+## 🛠️ Tech Stack
+
+- **Next.js 14** - React framework
+- **TypeScript** - Type safety
+- **Tailwind CSS** - Styling
+- **Framer Motion** - Animations
+- **Canvas Confetti** - Celebration effects
+- **PokeAPI** - Official Pokémon artwork
+- **Web Speech Synthesis** - Voice commands
+- **Vercel** - Deployment
+
+## 🎨 Pokémon Actions
+
+- 💪 Flex like Machamp
+- 😴 Sleep like Snorlax
+- ⚡ Lightning pose like Pikachu
+- 🔥 Breathe fire like Charizard
+- 🐢 Hide in shell like Squirtle
+- 🦋 Fly like Butterfree
+- 💃 Sing like Jigglypuff
+- 🐍 Slither like Ekans
+- 👊 Punch like Hitmonchan
+- 🧘 Meditate like Mewtwo
+- 🏃 Run fast like Rapidash
+- 🌊 Surf like Lapras
+- 👻 Sneak like Gengar
+- 🦅 Soar like Pidgeot
+- 🌿 Grow tall like Venusaur
+- 🐉 Roar like Gyarados
+- 🤸 Spin like Hitmonlee
+- 😤 Stomp like Onix
+
+## 🚀 Development
 
 ```bash
+# Install dependencies
+npm install
+
+# Run development server
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+
+# Build for production
+npm run build
+
+# Deploy to Vercel
+npx vercel --yes
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## 📱 Browser Compatibility
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- Chrome/Edge (recommended for best voice support)
+- Safari (iOS/macOS)
+- Firefox
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+**Note:** Voice commands require browser support for Web Speech Synthesis API.
 
-## Learn More
+## 🎉 Credits
 
-To learn more about Next.js, take a look at the following resources:
+Created with ❤️ for Bridger!
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Pokémon data and images from [PokeAPI](https://pokeapi.co/)
+- Built with Next.js, Tailwind CSS, and Framer Motion
+- Deployed on Vercel
