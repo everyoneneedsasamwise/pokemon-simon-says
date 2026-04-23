@@ -198,19 +198,11 @@ export function getStreakBonus(streak: number): StreakBonus | null {
 // Sequence length — grows with rounds, based on difficulty
 // ----------------------------------------------------------
 export function getSequenceLength(round: number, difficulty: Difficulty): number {
-  switch (difficulty) {
-    case 'easy':
-      return round >= 10 ? 2 : 1;
-    case 'normal':
-      if (round >= 14) return 3;
-      if (round >= 8) return 2;
-      return 1;
-    case 'hard':
-      if (round >= 13) return 4;
-      if (round >= 9) return 3;
-      if (round >= 5) return 2;
-      return 1;
-  }
+  // Easy: +1 action every 3 rounds (1,1,1,2,2,2,3,3,3,...)
+  // Normal: +1 action every 2 rounds (1,1,2,2,3,3,4,4,...)
+  // Hard: +1 action every round (1,2,3,4,5,...)
+  const interval = difficulty === 'easy' ? 3 : difficulty === 'normal' ? 2 : 1;
+  return 1 + Math.floor((round - 1) / interval);
 }
 
 // ----------------------------------------------------------
