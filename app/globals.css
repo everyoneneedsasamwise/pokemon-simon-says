@@ -13,10 +13,28 @@ body {
   max-width: 100vw;
   overflow-x: hidden;
   font-family: 'Comic Sans MS', 'Chalkboard SE', 'Comic Neue', cursive, sans-serif;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
-@media (prefers-color-scheme: dark) {
-  html {
-    color-scheme: dark;
-  }
+/* Prevent pull-to-refresh on mobile during gameplay */
+body {
+  overscroll-behavior: none;
+}
+
+/* Smooth scrolling for game over screen */
+.overflow-y-auto {
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
+
+/* Pulsing glow for boss rounds */
+@keyframes boss-pulse {
+  0%, 100% { box-shadow: 0 0 20px 5px rgba(255, 215, 0, 0.4); }
+  50% { box-shadow: 0 0 40px 10px rgba(255, 215, 0, 0.7); }
+}
+
+.boss-glow {
+  animation: boss-pulse 1s ease-in-out infinite;
 }
