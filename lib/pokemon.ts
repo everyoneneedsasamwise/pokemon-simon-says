@@ -193,3 +193,31 @@ export function getStreakBonus(streak: number): StreakBonus | null {
   }
   return null;
 }
+
+// ----------------------------------------------------------
+// Sequence length — grows with rounds, based on difficulty
+// ----------------------------------------------------------
+export function getSequenceLength(round: number, difficulty: Difficulty): number {
+  switch (difficulty) {
+    case 'easy':
+      return round >= 10 ? 2 : 1;
+    case 'normal':
+      if (round >= 14) return 3;
+      if (round >= 8) return 2;
+      return 1;
+    case 'hard':
+      if (round >= 13) return 4;
+      if (round >= 9) return 3;
+      if (round >= 5) return 2;
+      return 1;
+  }
+}
+
+// ----------------------------------------------------------
+// Speech rate — voice gets faster with rounds
+// ----------------------------------------------------------
+export function getSpeechRate(round: number, difficulty: Difficulty): number {
+  const base = difficulty === 'easy' ? 1.0 : difficulty === 'normal' ? 1.1 : 1.2;
+  const inc  = difficulty === 'easy' ? 0.025 : difficulty === 'normal' ? 0.035 : 0.045;
+  return Math.min(2.2, base + (round - 1) * inc);
+}

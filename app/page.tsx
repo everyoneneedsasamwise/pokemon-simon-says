@@ -9,6 +9,7 @@ import {
   type PokemonAction, type Difficulty, type DifficultyConfig,
   TYPE_COLORS, DIFFICULTY_CONFIGS, POINTS_REGULAR, POINTS_BOSS,
   fetchPokemonImage, getRandomPokemon, getRandomBoss, getStreakBonus,
+  getSequenceLength, getSpeechRate,
 } from '../lib/pokemon';
 import { sounds } from '../lib/sounds';
 import {
@@ -24,17 +25,39 @@ import Pokedex from '../components/Pokedex';
 // ============================================================
 
 type GameState =
-  | 'title'      // menu screen
-  | 'countdown'  // initial 3-2-1 countdown
-  | 'announcing' // showing pokemon + speaking command
-  | 'playing'    // timer active, motion detection on
-  | 'result'     // brief correct/wrong feedback
-  | 'between'    // between-rounds countdown
-  | 'gameover';  // game over screen
+  | 'title'
+  | 'countdown'
+  | 'watching'   // memory phase: showing all commands in sequence
+  | 'playing'    // performing: player acts on each command from memory
+  | 'between'
+  | 'gameover';
+
+interface SequenceAction {
+  pokemon: PokemonAction;
+  imageUrl: string;
+  simonSays: boolean;
+  isBoss: boolean;
+}
 
 // ============================================================
-// Photo framing helper
+// Helpers
 // ============================================================
+
+const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+function speak(text: string, rate = 1.1): Promise<void> {
+  return new Promise((resolve) => {
+    if (!('speechSynthesis' in window)) { resolve(); return; }
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.rate = rate;
+    u.pitch = 1.3;
+    u.volume = 1;
+    u.onend = () => resolve();
+    u.onerror = () => resolve();
+    window.speechSynthesis.speak(u);
+  });
+}
 
 async function addFrameToPhoto(
   photoDataUrl: string,
@@ -48,15 +71,14 @@ async function addFrameToPhoto(
 
     const img = document.createElement('img');
     img.onload = () => {
-      const pad = 24;
-      const bottom = 70;
+      const pad = 24, bottom = 70;
       canvas.width = img.width + pad * 2;
       canvas.height = img.height + pad * 2 + bottom;
 
-      const typeColors = TYPE_COLORS[pokemon.type];
+      const tc = TYPE_COLORS[pokemon.type];
       const grad = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
-      grad.addColorStop(0, typeColors.primary);
-      grad.addColorStop(1, typeColors.secondary);
+      grad.addColorStop(0, tc.primary);
+      grad.addColorStop(1, tc.secondary);
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
@@ -64,12 +86,10 @@ async function addFrameToPhoto(
       ctx.fillRect(pad - 4, pad - 4, img.width + 8, img.height + 8);
       ctx.drawImage(img, pad, pad);
 
-      // Type emoji corners
       ctx.font = '32px Arial';
-      ctx.fillText(typeColors.emoji, 8, 38);
-      ctx.fillText(typeColors.emoji, canvas.width - 42, 38);
+      ctx.fillText(tc.emoji, 8, 38);
+      ctx.fillText(tc.emoji, canvas.width - 42, 38);
 
-      // Bottom bar
       ctx.fillStyle = 'rgba(0,0,0,0.7)';
       ctx.fillRect(0, canvas.height - bottom, canvas.width, bottom);
       ctx.fillStyle = 'white';
@@ -78,17 +98,13 @@ async function addFrameToPhoto(
       ctx.textBaseline = 'middle';
       ctx.fillText(
         `I posed like ${pokemon.name}! ${pokemon.emoji}`,
-        canvas.width / 2,
-        canvas.height - bottom / 2
+        canvas.width / 2, canvas.height - bottom / 2
       );
 
-      // Sprite overlay
       const spriteImg = document.createElement('img');
       spriteImg.crossOrigin = 'anonymous';
       spriteImg.onload = () => {
-        const s = 100;
-        const sx = canvas.width - s - 12;
-        const sy = canvas.height - bottom - s - 12;
+        const s = 100, sx = canvas.width - s - 12, sy = canvas.height - bottom - s - 12;
         ctx.fillStyle = 'white';
         ctx.beginPath();
         ctx.arc(sx + s / 2, sy + s / 2, s / 2 + 4, 0, Math.PI * 2);
@@ -104,30 +120,12 @@ async function addFrameToPhoto(
 }
 
 // ============================================================
-// Speech helper
-// ============================================================
-
-function speak(text: string): Promise<void> {
-  return new Promise((resolve) => {
-    if (!('speechSynthesis' in window)) { resolve(); return; }
-    window.speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(text);
-    u.rate = 1.1;
-    u.pitch = 1.3;
-    u.volume = 1;
-    u.onend = () => resolve();
-    u.onerror = () => resolve();
-    window.speechSynthesis.speak(u);
-  });
-}
-
-// ============================================================
 // MAIN COMPONENT
 // ============================================================
 
 export default function Home() {
   // ----------------------------------------------------------
-  // State
+  // Game state
   // ----------------------------------------------------------
   const [gameState, setGameState] = useState<GameState>('title');
   const [difficulty, setDifficulty] = useState<Difficulty>('normal');
@@ -140,11 +138,10 @@ export default function Home() {
   const [streak, setStreak] = useState(0);
   const [bestStreak, setBestStreak] = useState(0);
 
-  const [currentPokemon, setCurrentPokemon] = useState<PokemonAction | null>(null);
-  const [pokemonImageUrl, setPokemonImageUrl] = useState('');
-  const [simonSays, setSimonSays] = useState(true);
-  const [isBossRound, setIsBossRound] = useState(false);
-
+  // Sequence state
+  const [sequence, setSequence] = useState<SequenceAction[]>([]);
+  const [watchIndex, setWatchIndex] = useState(0);
+  const [actionIndex, setActionIndex] = useState(0);
   const [timeLeft, setTimeLeft] = useState(5);
   const [countdownTime, setCountdownTime] = useState(3);
 
@@ -163,6 +160,15 @@ export default function Home() {
   const [isNewHighScore, setIsNewHighScore] = useState(false);
   const [newCatches, setNewCatches] = useState<PokemonAction[]>([]);
   const [shakeScreen, setShakeScreen] = useState(false);
+  const [sequenceIntro, setSequenceIntro] = useState(false); // "WATCH!" banner
+
+  // Derived display values
+  const displayIdx = gameState === 'watching' ? watchIndex : actionIndex;
+  const displayAction = sequence[displayIdx] ?? null;
+  const displayPokemon = displayAction?.pokemon ?? null;
+  const displayImageUrl = displayAction?.imageUrl ?? '';
+  const isBossRound = displayAction?.isBoss ?? false;
+  const isMultiAction = sequence.length > 1;
 
   // ----------------------------------------------------------
   // Refs
@@ -179,6 +185,31 @@ export default function Home() {
   const motionDetectedRef = useRef(false);
   const simonSaysRef = useRef(true);
   const hintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const capturedPokemonIdsRef = useRef<Set<number>>(new Set());
+
+  // Stable refs for values used in async flows
+  const sequenceRef = useRef<SequenceAction[]>([]);
+  const actionIndexRef = useRef(0);
+  const scoreRef = useRef(0);
+  const streakRef = useRef(0);
+  const bestStreakRef = useRef(0);
+  const roundRef = useRef(1);
+  const currentTimerRef = useRef(5);
+  const configRef = useRef(config);
+  const difficultyRef = useRef(difficulty);
+  const livesRef = useRef(3);
+
+  // Keep refs synced
+  useEffect(() => { sequenceRef.current = sequence; }, [sequence]);
+  useEffect(() => { actionIndexRef.current = actionIndex; }, [actionIndex]);
+  useEffect(() => { scoreRef.current = score; }, [score]);
+  useEffect(() => { streakRef.current = streak; }, [streak]);
+  useEffect(() => { bestStreakRef.current = bestStreak; }, [bestStreak]);
+  useEffect(() => { roundRef.current = round; }, [round]);
+  useEffect(() => { currentTimerRef.current = currentTimer; }, [currentTimer]);
+  useEffect(() => { configRef.current = config; }, [config]);
+  useEffect(() => { difficultyRef.current = difficulty; }, [difficulty]);
+  useEffect(() => { livesRef.current = lives; }, [lives]);
 
   // Motion thresholds
   const MOTION_THRESHOLD_SIMON = 12;
@@ -188,16 +219,13 @@ export default function Home() {
   const TOTAL_NEEDED_SIMON = 2;
   const TOTAL_NEEDED_NO_SIMON = 4;
 
-  // Keep ref in sync
-  useEffect(() => { simonSaysRef.current = simonSays; }, [simonSays]);
-
   // ----------------------------------------------------------
   // Camera
   // ----------------------------------------------------------
   const initCamera = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' }
+        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
       });
       streamRef.current = stream;
       if (videoRef.current) {
@@ -210,7 +238,6 @@ export default function Home() {
     }
   }, []);
 
-  // Re-attach stream if video element remounts
   useEffect(() => {
     if (streamRef.current && videoRef.current && !videoRef.current.srcObject) {
       videoRef.current.srcObject = streamRef.current;
@@ -268,15 +295,11 @@ export default function Home() {
 
     motionIntervalRef.current = setInterval(() => {
       const moving = detectMotion();
-      if (moving) {
-        motionCountRef.current++;
-        totalMotionRef.current++;
-      } else {
-        motionCountRef.current = 0;
-      }
+      if (moving) { motionCountRef.current++; totalMotionRef.current++; }
+      else { motionCountRef.current = 0; }
 
-      const consecutiveNeeded = simonSaysRef.current ? CONSECUTIVE_NEEDED_SIMON : CONSECUTIVE_NEEDED_NO_SIMON;
-      const sustained = motionCountRef.current >= consecutiveNeeded;
+      const consNeeded = simonSaysRef.current ? CONSECUTIVE_NEEDED_SIMON : CONSECUTIVE_NEEDED_NO_SIMON;
+      const sustained = motionCountRef.current >= consNeeded;
       setIsMoving(sustained);
 
       const totalNeeded = simonSaysRef.current ? TOTAL_NEEDED_SIMON : TOTAL_NEEDED_NO_SIMON;
@@ -304,214 +327,264 @@ export default function Home() {
   // ----------------------------------------------------------
   // Type-themed confetti
   // ----------------------------------------------------------
-  const fireConfetti = useCallback((pokemonType: string, intensity: number = 1) => {
-    const typeStyle = TYPE_COLORS[pokemonType as keyof typeof TYPE_COLORS];
-    const colors = typeStyle
-      ? [typeStyle.primary, typeStyle.secondary, '#FFD700']
-      : ['#FFD700', '#FF6B6B', '#4ECDC4'];
-
-    confetti({
-      particleCount: Math.round(80 * intensity),
-      spread: 60 + 20 * intensity,
-      origin: { y: 0.6 },
-      colors,
-    });
+  const fireConfetti = useCallback((pokemonType: string, intensity = 1) => {
+    const ts = TYPE_COLORS[pokemonType as keyof typeof TYPE_COLORS];
+    const colors = ts ? [ts.primary, ts.secondary, '#FFD700'] : ['#FFD700', '#FF6B6B', '#4ECDC4'];
+    confetti({ particleCount: Math.round(80 * intensity), spread: 60 + 20 * intensity, origin: { y: 0.6 }, colors });
   }, []);
 
   // ----------------------------------------------------------
-  // Process round result
+  // Handle action end (one action within a sequence)
   // ----------------------------------------------------------
-  const processRoundResult = useCallback(async (correct: boolean) => {
+  const handleActionEnd = useCallback(async () => {
     stopMotionDetection();
     if (hintTimerRef.current) { clearTimeout(hintTimerRef.current); hintTimerRef.current = null; }
     setShowHint(false);
 
+    const seq = sequenceRef.current;
+    const idx = actionIndexRef.current;
+    const action = seq[idx];
+    if (!action) return;
+
+    const wasSimonSays = action.simonSays;
+    const hadMotion = motionDetectedRef.current;
+    const correct = wasSimonSays ? hadMotion : !hadMotion;
+
     if (correct) {
       // Score
-      const points = isBossRound ? POINTS_BOSS : POINTS_REGULAR;
-      const newStreak = streak + 1;
+      const points = action.isBoss ? POINTS_BOSS : POINTS_REGULAR;
+      const newStreak = streakRef.current + 1;
       let bonusPoints = 0;
 
       setStreak(newStreak);
-      if (newStreak > bestStreak) setBestStreak(newStreak);
+      if (newStreak > bestStreakRef.current) setBestStreak(newStreak);
 
-      // Check streak bonus
       const bonus = getStreakBonus(newStreak);
       if (bonus) {
         bonusPoints = bonus.points;
         sounds.streak(newStreak);
         setStreakPopup(`${bonus.emoji} ${bonus.label} +${bonus.points}`);
         setTimeout(() => setStreakPopup(null), 1500);
-
-        if (bonus.extraLife) {
-          sounds.extraLife();
-          setLives(prev => prev + 1);
-        }
+        if (bonus.extraLife) { sounds.extraLife(); setLives(prev => prev + 1); }
       }
 
       setScore(prev => prev + points + bonusPoints);
       setResultFlash('correct');
+      sounds.success();
+      fireConfetti(action.pokemon.type, action.isBoss ? 2 : 1);
 
-      // Confetti
-      if (isBossRound) {
+      if (action.isBoss) {
         sounds.bossDefeated();
-        fireConfetti(currentPokemon?.type || 'normal', 2);
-        setTimeout(() => fireConfetti(currentPokemon?.type || 'normal', 1.5), 300);
-      } else {
-        sounds.success();
-        fireConfetti(currentPokemon?.type || 'normal', 1);
+        setTimeout(() => fireConfetti(action.pokemon.type, 1.5), 300);
       }
 
       // Pokemon cry
-      if (currentPokemon) sounds.pokemonCry(currentPokemon.id);
+      sounds.pokemonCry(action.pokemon.id);
 
-      // Capture photo if simon says round
-      if (simonSays && currentPokemon) {
+      // Photo — one per character per game
+      if (wasSimonSays && !capturedPokemonIdsRef.current.has(action.pokemon.id)) {
+        capturedPokemonIdsRef.current.add(action.pokemon.id);
         const photoData = capturePhoto();
         if (photoData) {
-          const framedPhoto = await addFrameToPhoto(photoData, currentPokemon, pokemonImageUrl);
+          const framedPhoto = await addFrameToPhoto(photoData, action.pokemon, action.imageUrl);
           const pose: CapturedPose = {
             imageData: photoData, framedImageData: framedPhoto,
-            pokemonName: currentPokemon.name, pokemonEmoji: currentPokemon.emoji,
-            action: currentPokemon.action, pokemonId: currentPokemon.id,
-            pokemonType: currentPokemon.type,
+            pokemonName: action.pokemon.name, pokemonEmoji: action.pokemon.emoji,
+            action: action.pokemon.action, pokemonId: action.pokemon.id,
+            pokemonType: action.pokemon.type,
           };
           setCapturedPoses(prev => [...prev, pose]);
           setLatestPose(pose);
           setShowCapturedPose(true);
-          setTimeout(() => setShowCapturedPose(false), 1500);
+          setTimeout(() => setShowCapturedPose(false), 1200);
         }
-
-        // Pokedex
-        const isFirstCatch = catchPokemon(currentPokemon.id);
-        if (isFirstCatch) {
-          setNewCatches(prev => [...prev, currentPokemon]);
-        }
+        const isFirstCatch = catchPokemon(action.pokemon.id);
+        if (isFirstCatch) setNewCatches(prev => [...prev, action.pokemon]);
       }
 
-      // Speed increase
-      if (round > 0 && round % config.speedIncreaseEvery === 0) {
-        setCurrentTimer(prev => Math.max(config.minTimer, prev - config.speedDecrease));
-        sounds.speedUp();
-        await speak('Faster!');
+      // More actions in this sequence?
+      if (idx < seq.length - 1) {
+        // Advance to next action in sequence
+        setTimeout(() => {
+          setResultFlash(null);
+          const nextIdx = idx + 1;
+          setActionIndex(nextIdx);
+          actionIndexRef.current = nextIdx;
+          simonSaysRef.current = seq[nextIdx].simonSays;
+          motionDetectedRef.current = false;
+          setIsMoving(false);
+          previousFrameRef.current = null;
+          setTimeLeft(currentTimerRef.current);
+          startMotionDetection();
+          // No hints during multi-action (must remember!)
+        }, 800);
+      } else {
+        // Sequence complete — speed check + next round
+        const cfg = configRef.current;
+        const rd = roundRef.current;
+        if (rd > 0 && rd % cfg.speedIncreaseEvery === 0) {
+          setCurrentTimer(prev => Math.max(cfg.minTimer, prev - cfg.speedDecrease));
+          sounds.speedUp();
+        }
+        setRound(prev => prev + 1);
+        setTimeout(() => {
+          setResultFlash(null);
+          setGameState('between');
+          setCountdownTime(2);
+        }, 800);
       }
-
-      setRound(prev => prev + 1);
-      setTimeout(() => {
-        setResultFlash(null);
-        setGameState('between');
-        setCountdownTime(2);
-      }, 800);
-
     } else {
-      // Wrong
+      // Wrong — lose a life, abandon rest of sequence
       sounds.fail();
       setResultFlash('wrong');
       setShakeScreen(true);
       setStreak(0);
       setTimeout(() => setShakeScreen(false), 500);
 
-      setLives(prev => {
-        const newLives = prev - 1;
-        if (newLives <= 0) {
-          setTimeout(() => {
-            setResultFlash(null);
-            // Save high score
-            const isNew = addHighScore(difficulty, score, round);
-            setIsNewHighScore(isNew);
-            setGameState('gameover');
-          }, 1000);
-        } else {
-          sounds.loseLife();
-          setTimeout(() => {
-            setResultFlash(null);
-            setGameState('between');
-            setCountdownTime(2);
-          }, 1000);
-        }
-        return newLives;
-      });
+      const newLives = livesRef.current - 1;
+      setLives(newLives);
+
+      if (newLives <= 0) {
+        setTimeout(() => {
+          setResultFlash(null);
+          const isNew = addHighScore(difficultyRef.current, scoreRef.current, roundRef.current);
+          setIsNewHighScore(isNew);
+          setGameState('gameover');
+        }, 1000);
+      } else {
+        sounds.loseLife();
+        setTimeout(() => {
+          setResultFlash(null);
+          setGameState('between');
+          setCountdownTime(2);
+        }, 1000);
+      }
     }
-  }, [
-    streak, bestStreak, isBossRound, currentPokemon, simonSays,
-    pokemonImageUrl, round, config, difficulty, score,
-    stopMotionDetection, capturePhoto, fireConfetti,
-  ]);
+  }, [stopMotionDetection, startMotionDetection, capturePhoto, fireConfetti]);
 
   // ----------------------------------------------------------
-  // Handle round end (timer expired)
+  // Build and start a new sequence
   // ----------------------------------------------------------
-  const handleRoundEnd = useCallback(() => {
-    const wasSimonSays = simonSaysRef.current;
-    const hadMotion = motionDetectedRef.current;
-    const correct = wasSimonSays ? hadMotion : !hadMotion;
-    processRoundResult(correct);
-  }, [processRoundResult]);
-
-  // ----------------------------------------------------------
-  // Start a new round
-  // ----------------------------------------------------------
-  const startNewRound = useCallback(async () => {
+  const startNewSequence = useCallback(async () => {
     stopMotionDetection();
     motionDetectedRef.current = false;
     setIsMoving(false);
     setShowHint(false);
     previousFrameRef.current = null;
 
-    // Determine if boss round
-    const boss = round > 1 && round % config.bossEvery === 0;
-    setIsBossRound(boss);
+    const rd = roundRef.current;
+    const diff = difficultyRef.current;
+    const cfg = configRef.current;
 
-    // Pick Pokemon
-    const pokemon = boss ? getRandomBoss() : getRandomPokemon();
-    setCurrentPokemon(pokemon);
+    // Boss?
+    const isBoss = rd > 1 && rd % cfg.bossEvery === 0;
 
-    // Fetch image
-    const imageUrl = await fetchPokemonImage(pokemon.id);
-    setPokemonImageUrl(imageUrl);
+    // Sequence length (boss rounds are always 1)
+    const seqLen = isBoss ? 1 : getSequenceLength(rd, diff);
 
-    // Simon says or trick?
-    const isTrick = !boss && Math.random() < config.trickChance;
-    setSimonSays(!isTrick);
-    simonSaysRef.current = !isTrick;
+    // Speech rate (gets faster each round)
+    const rate = getSpeechRate(rd, diff);
 
-    // Announce phase
-    setGameState('announcing');
-    setTimeLeft(currentTimer);
+    // Build sequence actions
+    const actions: SequenceAction[] = [];
+    for (let i = 0; i < seqLen; i++) {
+      const pokemon = isBoss ? getRandomBoss() : getRandomPokemon();
+      const imageUrl = await fetchPokemonImage(pokemon.id);
+      const isTrick = !isBoss && Math.random() < cfg.trickChance;
+      actions.push({ pokemon, imageUrl, simonSays: !isTrick, isBoss });
+    }
+
+    setSequence(actions);
+    sequenceRef.current = actions;
+    setWatchIndex(0);
+    setActionIndex(0);
+    actionIndexRef.current = 0;
+
+    // Show sequence intro banner for multi-action
+    if (seqLen > 1) {
+      setSequenceIntro(true);
+      await speak('Watch carefully!', rate);
+      await delay(300);
+      setSequenceIntro(false);
+    }
 
     // Boss announcement
-    if (boss) {
+    if (isBoss) {
       sounds.bossAppear();
-      await speak('Boss round!');
-      await new Promise(r => setTimeout(r, 400));
+      await speak('Boss round!', rate);
+      await delay(400);
     }
 
-    // Pokemon cry
-    sounds.pokemonCry(pokemon.id);
-    await new Promise(r => setTimeout(r, 600));
-
-    // Speak the command
-    const command = isTrick
-      ? `${pokemon.action} like ${pokemon.name}!`
-      : `Simon says... ${pokemon.action} like ${pokemon.name}!`;
-    await speak(command);
-    await new Promise(r => setTimeout(r, 300));
-
-    // Start playing
-    startMotionDetection();
-    setGameState('playing');
-
-    // Hint delay
-    if (config.hintDelay === 0) {
-      setShowHint(true);
-    } else if (config.hintDelay < Infinity) {
-      hintTimerRef.current = setTimeout(() => setShowHint(true), config.hintDelay * 1000);
-    }
-    // Infinity = never show hint
-  }, [round, config, currentTimer, stopMotionDetection, startMotionDetection]);
+    // Enter watching phase — the effect will drive it
+    setGameState('watching');
+  }, [stopMotionDetection]);
 
   // ----------------------------------------------------------
-  // Timer tick (playing state only)
+  // Watching phase — show each command in sequence
+  // ----------------------------------------------------------
+  useEffect(() => {
+    if (gameState !== 'watching') return;
+    const seq = sequenceRef.current;
+    const action = seq[watchIndex];
+    if (!action) return;
+
+    let aborted = false;
+    const rate = getSpeechRate(roundRef.current, difficultyRef.current);
+
+    (async () => {
+      // Pokemon cry
+      sounds.pokemonCry(action.pokemon.id);
+      await delay(500);
+      if (aborted) return;
+
+      // Speak command
+      const cmd = action.simonSays
+        ? `Simon says... ${action.pokemon.action} like ${action.pokemon.name}!`
+        : `${action.pokemon.action} like ${action.pokemon.name}!`;
+      await speak(cmd, rate);
+      if (aborted) return;
+
+      await delay(300);
+      if (aborted) return;
+
+      // Advance or transition to playing
+      if (watchIndex < seq.length - 1) {
+        setWatchIndex(prev => prev + 1);
+      } else {
+        // Done watching
+        if (seq.length > 1) {
+          await speak('Your turn!', rate);
+          if (aborted) return;
+          await delay(200);
+          if (aborted) return;
+        }
+
+        // Start performing first action
+        setActionIndex(0);
+        actionIndexRef.current = 0;
+        simonSaysRef.current = seq[0].simonSays;
+        setTimeLeft(currentTimerRef.current);
+        startMotionDetection();
+        setGameState('playing');
+
+        // Hints only for single-action sequences
+        const cfg = configRef.current;
+        if (seq.length === 1) {
+          if (cfg.hintDelay === 0) {
+            setShowHint(true);
+          } else if (cfg.hintDelay < Infinity) {
+            hintTimerRef.current = setTimeout(() => setShowHint(true), cfg.hintDelay * 1000);
+          }
+        }
+      }
+    })();
+
+    return () => { aborted = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gameState, watchIndex, startMotionDetection]);
+
+  // ----------------------------------------------------------
+  // Timer tick (playing only)
   // ----------------------------------------------------------
   useEffect(() => {
     if (gameState === 'playing' && timeLeft > 0) {
@@ -519,12 +592,12 @@ export default function Home() {
       return () => clearTimeout(t);
     }
     if (gameState === 'playing' && timeLeft <= 0) {
-      handleRoundEnd();
+      handleActionEnd();
     }
-  }, [gameState, timeLeft, handleRoundEnd]);
+  }, [gameState, timeLeft, handleActionEnd]);
 
   // ----------------------------------------------------------
-  // Countdown ticks
+  // Countdown (between rounds)
   // ----------------------------------------------------------
   useEffect(() => {
     if (gameState !== 'countdown' && gameState !== 'between') return;
@@ -537,12 +610,11 @@ export default function Home() {
       const t = setTimeout(() => {
         setCountdownTime(0);
         sounds.countdownGo();
-        speak('Go!');
-        startNewRound();
+        startNewSequence();
       }, 1000);
       return () => clearTimeout(t);
     }
-  }, [gameState, countdownTime, startNewRound]);
+  }, [gameState, countdownTime, startNewSequence]);
 
   // ----------------------------------------------------------
   // Start game
@@ -550,19 +622,23 @@ export default function Home() {
   const startGame = useCallback(async (diff: Difficulty) => {
     const cfg = DIFFICULTY_CONFIGS[diff];
     setDifficulty(diff);
+    difficultyRef.current = diff;
     setConfig(cfg);
+    configRef.current = cfg;
     saveLastDifficulty(diff);
 
-    setScore(0);
-    setLives(cfg.lives);
-    setRound(1);
-    setCurrentTimer(cfg.timer);
-    setStreak(0);
-    setBestStreak(0);
+    setScore(0); scoreRef.current = 0;
+    setLives(cfg.lives); livesRef.current = cfg.lives;
+    setRound(1); roundRef.current = 1;
+    setCurrentTimer(cfg.timer); currentTimerRef.current = cfg.timer;
+    setStreak(0); streakRef.current = 0;
+    setBestStreak(0); bestStreakRef.current = 0;
+    setSequence([]); sequenceRef.current = [];
     setCapturedPoses([]);
     setLatestPose(null);
     setNewCatches([]);
     setIsNewHighScore(false);
+    capturedPokemonIdsRef.current = new Set();
     setGameStarted(true);
 
     if (!cameraReady) {
@@ -570,7 +646,7 @@ export default function Home() {
       setCountdownTime(99);
       await speak('Starting camera...');
       await initCamera();
-      await new Promise(r => setTimeout(r, 500));
+      await delay(500);
     }
 
     setGameState('countdown');
@@ -579,20 +655,7 @@ export default function Home() {
   }, [cameraReady, initCamera]);
 
   // ----------------------------------------------------------
-  // Cleanup
-  // ----------------------------------------------------------
-  useEffect(() => {
-    return () => {
-      stopMotionDetection();
-      if (hintTimerRef.current) clearTimeout(hintTimerRef.current);
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(t => t.stop());
-      }
-    };
-  }, [stopMotionDetection]);
-
-  // ----------------------------------------------------------
-  // Skip round
+  // Skip
   // ----------------------------------------------------------
   const handleSkip = () => {
     sounds.click();
@@ -603,13 +666,24 @@ export default function Home() {
     setCountdownTime(2);
   };
 
+  // ----------------------------------------------------------
+  // Cleanup
+  // ----------------------------------------------------------
+  useEffect(() => {
+    return () => {
+      stopMotionDetection();
+      if (hintTimerRef.current) clearTimeout(hintTimerRef.current);
+      if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
+    };
+  }, [stopMotionDetection]);
+
   // ============================================================
   // RENDER
   // ============================================================
 
   const showCamera = gameState !== 'title' && gameState !== 'gameover' && gameStarted;
-  const isPlaying = gameState === 'playing' || gameState === 'announcing';
-  const typeStyle = currentPokemon ? TYPE_COLORS[currentPokemon.type] : null;
+  const isActive = gameState === 'playing' || gameState === 'watching';
+  const typeStyle = displayPokemon ? TYPE_COLORS[displayPokemon.type] : null;
 
   return (
     <motion.div
@@ -617,7 +691,6 @@ export default function Home() {
       transition={{ duration: 0.5 }}
       className="min-h-[100dvh] bg-gradient-to-br from-blue-400 via-purple-400 to-pink-400 flex items-center justify-center overflow-hidden relative"
     >
-      {/* Hidden canvases */}
       <canvas ref={canvasRef} style={{ display: 'none' }} />
       <canvas ref={motionCanvasRef} style={{ display: 'none' }} />
 
@@ -625,32 +698,28 @@ export default function Home() {
       {gameStarted && (
         <div className={`absolute inset-0 z-0 transition-opacity duration-300 ${showCamera ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
           <div className="w-full max-w-lg mx-auto h-[100dvh] py-2 px-2 flex flex-col">
-            {/* Spacer for HUD */}
             <div style={{ height: '160px', flexShrink: 0 }} />
 
-            {/* Camera feed */}
             <div className="flex-1 min-h-0 relative mb-2">
               <motion.div
                 className="relative w-full h-full rounded-2xl overflow-hidden"
                 animate={{
-                  boxShadow: isPlaying
+                  boxShadow: gameState === 'playing'
                     ? isMoving
-                      ? `0 0 30px 8px rgba(239, 68, 68, 0.7)`
-                      : `0 0 30px 8px rgba(34, 197, 94, 0.7)`
+                      ? '0 0 30px 8px rgba(239, 68, 68, 0.7)'
+                      : '0 0 30px 8px rgba(34, 197, 94, 0.7)'
                     : '0 0 15px 4px rgba(255, 255, 255, 0.2)',
                 }}
               >
                 {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
                 <video
                   ref={videoRef}
-                  autoPlay
-                  playsInline
-                  muted
+                  autoPlay playsInline muted
                   className="w-full h-full object-cover rounded-2xl"
                 />
 
-                {/* Type-themed overlay glow during play */}
-                {isPlaying && typeStyle && (
+                {/* Type glow */}
+                {isActive && typeStyle && (
                   <div
                     className="absolute inset-0 pointer-events-none rounded-2xl"
                     style={{
@@ -660,8 +729,8 @@ export default function Home() {
                   />
                 )}
 
-                {/* Motion indicator */}
-                {isPlaying && (
+                {/* Motion indicator (playing only) */}
+                {gameState === 'playing' && (
                   <div
                     className="absolute top-2 right-2 px-3 py-1 rounded-full font-black text-sm"
                     style={{
@@ -673,7 +742,7 @@ export default function Home() {
                   </div>
                 )}
 
-                {/* Result flash overlay */}
+                {/* Result flash */}
                 <AnimatePresence>
                   {resultFlash && (
                     <motion.div
@@ -681,9 +750,7 @@ export default function Home() {
                       animate={{ opacity: 0.4 }}
                       exit={{ opacity: 0 }}
                       className="absolute inset-0 z-10 rounded-2xl"
-                      style={{
-                        backgroundColor: resultFlash === 'correct' ? '#22c55e' : '#ef4444',
-                      }}
+                      style={{ backgroundColor: resultFlash === 'correct' ? '#22c55e' : '#ef4444' }}
                     />
                   )}
                 </AnimatePresence>
@@ -707,24 +774,34 @@ export default function Home() {
                   </div>
                 )}
 
-                {/* Announcing overlay */}
-                {gameState === 'announcing' && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-black/40 z-10">
-                    <motion.div
-                      initial={{ scale: 0 }}
-                      animate={{ scale: 1 }}
-                      className="text-center"
-                    >
-                      {isBossRound && (
+                {/* Watching overlay */}
+                {gameState === 'watching' && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-10">
+                    <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="text-center">
+                      {sequenceIntro ? (
                         <motion.div
                           animate={{ scale: [1, 1.1, 1] }}
-                          transition={{ duration: 0.5, repeat: Infinity }}
-                          className="text-2xl font-black text-yellow-300 mb-2"
+                          transition={{ duration: 0.6, repeat: Infinity }}
+                          className="text-3xl font-black text-yellow-300"
                         >
-                          BOSS ROUND!
+                          WATCH CAREFULLY!
                         </motion.div>
+                      ) : (
+                        <>
+                          {isBossRound && (
+                            <motion.div
+                              animate={{ scale: [1, 1.1, 1] }}
+                              transition={{ duration: 0.5, repeat: Infinity }}
+                              className="text-xl font-black text-yellow-300 mb-2"
+                            >
+                              BOSS ROUND!
+                            </motion.div>
+                          )}
+                          <div className="text-2xl font-black text-white">
+                            {isMultiAction ? `LISTEN... (${watchIndex + 1}/${sequence.length})` : 'Listen...'}
+                          </div>
+                        </>
                       )}
-                      <div className="text-3xl font-black text-white">Listen...</div>
                     </motion.div>
                   </div>
                 )}
@@ -754,7 +831,6 @@ export default function Home() {
               </motion.div>
             </div>
 
-            {/* Bottom spacer */}
             <div style={{ height: '50px', flexShrink: 0 }} />
           </div>
         </div>
@@ -762,7 +838,7 @@ export default function Home() {
 
       {/* =============== UI OVERLAY =============== */}
       <AnimatePresence mode="wait">
-        {/* TITLE SCREEN */}
+        {/* TITLE */}
         {gameState === 'title' && (
           <TitleScreen
             onStart={startGame}
@@ -779,7 +855,7 @@ export default function Home() {
             exit={{ opacity: 0 }}
             className="w-full max-w-lg mx-auto flex flex-col h-[100dvh] py-2 px-2 z-10 pointer-events-none"
           >
-            {/* Top bar: Score + Streak + Lives */}
+            {/* Top bar */}
             <div className="flex justify-between items-center mb-1">
               <div className="bg-blue-900/60 backdrop-blur px-3 py-1 rounded-2xl flex items-center gap-2 text-white">
                 <span className="text-xs font-bold">SCORE</span>
@@ -800,53 +876,58 @@ export default function Home() {
 
               <div className="bg-black/40 backdrop-blur px-3 py-1 rounded-2xl text-lg">
                 {'❤️'.repeat(Math.min(lives, 10))}
-                {lives < config.lives && '🖤'.repeat(Math.max(0, config.lives - lives))}
               </div>
             </div>
 
-            {/* Round indicator */}
+            {/* Round + sequence indicator */}
             <div className="text-center text-white/70 text-xs font-bold mb-1">
               ROUND {round}
               {isBossRound && <span className="text-yellow-300 ml-1">BOSS!</span>}
+              {isMultiAction && gameState === 'playing' && (
+                <span className="text-cyan-300 ml-1">
+                  ACTION {actionIndex + 1}/{sequence.length}
+                </span>
+              )}
             </div>
 
-            {/* Timer bar */}
-            <div className="bg-gray-200/30 rounded-full h-2.5 overflow-hidden mb-2">
-              <motion.div
-                className="h-full rounded-full"
-                initial={{ width: '100%' }}
-                animate={{ width: `${Math.max(0, (timeLeft / currentTimer) * 100)}%` }}
-                style={{
-                  backgroundColor:
-                    timeLeft < currentTimer * 0.3 ? '#ef4444' :
-                    timeLeft < currentTimer * 0.6 ? '#f59e0b' : '#22c55e',
-                }}
-              />
-            </div>
+            {/* Timer bar (playing only) */}
+            {gameState === 'playing' && (
+              <div className="bg-gray-200/30 rounded-full h-2.5 overflow-hidden mb-2">
+                <motion.div
+                  className="h-full rounded-full"
+                  initial={{ width: '100%' }}
+                  animate={{ width: `${Math.max(0, (timeLeft / currentTimer) * 100)}%` }}
+                  style={{
+                    backgroundColor:
+                      timeLeft < currentTimer * 0.3 ? '#ef4444' :
+                      timeLeft < currentTimer * 0.6 ? '#f59e0b' : '#22c55e',
+                  }}
+                />
+              </div>
+            )}
 
             {/* Command card */}
-            {(gameState === 'playing' || gameState === 'announcing') && currentPokemon && (
+            {(gameState === 'playing' || gameState === 'watching') && displayPokemon && (
               <motion.div
+                key={`${displayPokemon.id}-${displayIdx}`}
                 initial={{ y: -20, opacity: 0 }}
                 animate={{ y: 0, opacity: 1 }}
                 className="rounded-2xl p-3 shadow-lg mb-2"
                 style={{
-                  backgroundColor: isBossRound
-                    ? 'rgba(255,215,0,0.95)'
-                    : 'rgba(255,255,255,0.95)',
+                  backgroundColor: isBossRound ? 'rgba(255,215,0,0.95)' : 'rgba(255,255,255,0.95)',
                   border: isBossRound ? '3px solid #B8860B' : 'none',
                 }}
               >
                 <div className="flex items-center gap-3">
-                  {pokemonImageUrl && (
+                  {displayImageUrl && (
                     <motion.div
                       className="relative w-16 h-16 flex-shrink-0"
                       animate={{ y: [0, -3, 0] }}
                       transition={{ duration: 1, repeat: Infinity }}
                     >
                       <Image
-                        src={pokemonImageUrl}
-                        alt={currentPokemon.name}
+                        src={displayImageUrl}
+                        alt={displayPokemon.name}
                         fill
                         style={{ objectFit: 'contain' }}
                         unoptimized
@@ -857,20 +938,39 @@ export default function Home() {
                     {isBossRound && (
                       <div className="text-xs font-black text-yellow-700">LEGENDARY!</div>
                     )}
+                    {isMultiAction && gameState === 'watching' && (
+                      <div className="text-xs font-black text-blue-600">
+                        {watchIndex + 1} of {sequence.length}
+                      </div>
+                    )}
+                    {isMultiAction && gameState === 'playing' && (
+                      <div className="text-xs font-black text-purple-600">
+                        PERFORM {actionIndex + 1} of {sequence.length}
+                      </div>
+                    )}
                     <div className="text-xl font-black text-purple-900 leading-tight">
-                      {currentPokemon.emoji} {currentPokemon.action}
+                      {displayPokemon.emoji} {displayPokemon.action}
                     </div>
-                    <div className="text-sm font-bold text-gray-500">like {currentPokemon.name}!</div>
+                    <div className="text-sm font-bold text-gray-500">like {displayPokemon.name}!</div>
 
-                    {/* Hint — only shows based on difficulty hintDelay */}
-                    {showHint && gameState === 'playing' && (
+                    {/* Hint — single-action only, based on difficulty delay */}
+                    {showHint && gameState === 'playing' && !isMultiAction && (
                       <motion.div
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 1 }}
-                        className={`text-xs font-bold mt-0.5 ${simonSays ? 'text-green-600' : 'text-red-600'}`}
+                        className={`text-xs font-bold mt-0.5 ${
+                          sequence[actionIndex]?.simonSays ? 'text-green-600' : 'text-red-600'
+                        }`}
                       >
-                        {simonSays ? 'MOVE!' : 'STAY STILL!'}
+                        {sequence[actionIndex]?.simonSays ? 'MOVE!' : 'STAY STILL!'}
                       </motion.div>
+                    )}
+
+                    {/* Memory reminder for multi-action */}
+                    {isMultiAction && gameState === 'playing' && (
+                      <div className="text-xs font-bold text-gray-400 mt-0.5">
+                        Remember what you heard!
+                      </div>
                     )}
                   </div>
                 </div>
@@ -893,11 +993,10 @@ export default function Home() {
               )}
             </AnimatePresence>
 
-            {/* Spacer */}
             <div className="flex-1" />
 
-            {/* Bottom controls */}
-            {(gameState === 'playing' || gameState === 'announcing') && (
+            {/* Skip button */}
+            {(gameState === 'playing' || gameState === 'watching') && (
               <div className="flex justify-center gap-3 pointer-events-auto">
                 <motion.button
                   whileTap={{ scale: 0.95 }}
@@ -911,7 +1010,7 @@ export default function Home() {
           </motion.div>
         )}
 
-        {/* GAME OVER SCREEN */}
+        {/* GAME OVER */}
         {gameState === 'gameover' && (
           <GameOverScreen
             score={score}
