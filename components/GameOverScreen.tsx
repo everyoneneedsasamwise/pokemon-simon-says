@@ -3,6 +3,7 @@
 import { motion } from 'framer-motion';
 import { sounds } from '../lib/sounds';
 import { type PokemonAction, TYPE_COLORS } from '../lib/pokemon';
+import type { CapturedClip } from '../lib/recorder';
 import { useEffect, useState } from 'react';
 
 interface CapturedPose {
@@ -20,6 +21,7 @@ interface GameOverScreenProps {
   round: number;
   streak: number;
   capturedPoses: CapturedPose[];
+  capturedClips: CapturedClip[];
   newCatches: PokemonAction[];
   isNewHighScore: boolean;
   onPlayAgain: () => void;
@@ -42,6 +44,38 @@ function downloadAllPhotos(poses: CapturedPose[]) {
   });
 }
 
+function clipExtension(mimeType: string): string {
+  return mimeType.includes('mp4') ? 'mp4' : 'webm';
+}
+
+function downloadClip(clip: CapturedClip) {
+  const link = document.createElement('a');
+  link.href = clip.url;
+  link.download = `pokemon-simon-says-${clip.pokemonName.toLowerCase()}.${clipExtension(clip.mimeType)}`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
+async function shareClip(clip: CapturedClip) {
+  try {
+    const response = await fetch(clip.url);
+    const blob = await response.blob();
+    const file = new File(
+      [blob],
+      `pokemon-simon-says-${clip.pokemonName.toLowerCase()}.${clipExtension(clip.mimeType)}`,
+      { type: clip.mimeType }
+    );
+    if (navigator.share && navigator.canShare?.({ files: [file] })) {
+      await navigator.share({ title: `I moved like ${clip.pokemonName}!`, files: [file] });
+    } else {
+      downloadClip(clip);
+    }
+  } catch (error) {
+    if ((error as Error).name !== 'AbortError') downloadClip(clip);
+  }
+}
+
 async function sharePhoto(imageData: string, name: string) {
   try {
     const response = await fetch(imageData);
@@ -58,7 +92,7 @@ async function sharePhoto(imageData: string, name: string) {
 }
 
 export default function GameOverScreen({
-  score, round, streak, capturedPoses, newCatches, isNewHighScore,
+  score, round, streak, capturedPoses, capturedClips, newCatches, isNewHighScore,
   onPlayAgain, onTitleScreen, onOpenPokedex,
 }: GameOverScreenProps) {
   const [showHighScore, setShowHighScore] = useState(false);
@@ -155,6 +189,42 @@ export default function GameOverScreen({
             })}
           </div>
         </motion.div>
+      )}
+
+      {/* Video highlight reel */}
+      {capturedClips.length > 0 && (
+        <div className="bg-white/90 rounded-2xl p-3 mb-4 shadow-xl">
+          <h3 className="text-lg font-black text-purple-900 mb-2">🎬 YOUR MOVES!</h3>
+          <div className="grid grid-cols-2 gap-2">
+            {capturedClips.map((clip, i) => {
+              const typeStyle = TYPE_COLORS[clip.pokemonType as keyof typeof TYPE_COLORS];
+              return (
+                <motion.div
+                  key={clip.url}
+                  initial={{ scale: 0 }}
+                  animate={{ scale: 1 }}
+                  transition={{ delay: 0.3 + i * 0.1 }}
+                  className="rounded-xl p-1.5 shadow"
+                  style={{ backgroundColor: typeStyle ? `${typeStyle.primary}22` : '#f3e8ff' }}
+                >
+                  {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+                  <video
+                    src={clip.url}
+                    autoPlay loop muted playsInline
+                    className="w-full rounded-lg mb-1 bg-black"
+                  />
+                  <div className="text-xs font-bold text-purple-900">
+                    {clip.pokemonEmoji} {clip.action}
+                  </div>
+                  <div className="flex gap-1 justify-center mt-1">
+                    <button onClick={() => downloadClip(clip)} className="bg-green-500 text-white text-xs px-2 py-0.5 rounded-full">Save</button>
+                    <button onClick={() => shareClip(clip)} className="bg-purple-500 text-white text-xs px-2 py-0.5 rounded-full">Share</button>
+                  </div>
+                </motion.div>
+              );
+            })}
+          </div>
+        </div>
       )}
 
       {/* Photo gallery */}

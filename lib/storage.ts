@@ -29,7 +29,7 @@ const MAX_HIGH_SCORES = 5;
 
 function defaults(): GameData {
   return {
-    highScores: { easy: [], normal: [], hard: [] },
+    highScores: { easy: [], normal: [], hard: [], master: [] },
     pokedex: {},
     totalGamesPlayed: 0,
     lastDifficulty: 'normal',
@@ -40,7 +40,14 @@ export function loadGameData(): GameData {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return defaults();
-    return { ...defaults(), ...JSON.parse(raw) };
+    const parsed = JSON.parse(raw);
+    const base = defaults();
+    return {
+      ...base,
+      ...parsed,
+      // Saved data from before the 'master' difficulty lacks its key
+      highScores: { ...base.highScores, ...(parsed.highScores || {}) },
+    };
   } catch {
     return defaults();
   }

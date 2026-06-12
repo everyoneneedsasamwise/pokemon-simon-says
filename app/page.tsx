@@ -15,6 +15,7 @@ import { sounds } from '../lib/sounds';
 import {
   addHighScore, catchPokemon, saveLastDifficulty,
 } from '../lib/storage';
+import { ClipRecorder, revokeClips, type CapturedClip } from '../lib/recorder';
 import type { CapturedPose } from '../components/GameOverScreen';
 import TitleScreen from '../components/TitleScreen';
 import GameOverScreen from '../components/GameOverScreen';
@@ -146,6 +147,7 @@ export default function Home() {
   const [countdownTime, setCountdownTime] = useState(3);
 
   const [capturedPoses, setCapturedPoses] = useState<CapturedPose[]>([]);
+  const [capturedClips, setCapturedClips] = useState<CapturedClip[]>([]);
   const [showCapturedPose, setShowCapturedPose] = useState(false);
   const [latestPose, setLatestPose] = useState<CapturedPose | null>(null);
 
@@ -186,6 +188,8 @@ export default function Home() {
   const simonSaysRef = useRef(true);
   const hintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const capturedPokemonIdsRef = useRef<Set<number>>(new Set());
+  const clipRecorderRef = useRef<ClipRecorder | null>(null);
+  const capturedClipsRef = useRef<CapturedClip[]>([]);
 
   // Stable refs for values used in async flows
   const sequenceRef = useRef<SequenceAction[]>([]);
@@ -293,7 +297,12 @@ export default function Home() {
     totalMotionRef.current = 0;
     previousFrameRef.current = null;
 
+    // Grace period: ignore the first ~600ms so kids aren't punished for
+    // settling after the command (especially on trick rounds)
+    let ticks = 0;
     motionIntervalRef.current = setInterval(() => {
+      ticks++;
+      if (ticks <= 4) { detectMotion(); return; } // warm up frame diff, don't count
       const moving = detectMotion();
       if (moving) { motionCountRef.current++; totalMotionRef.current++; }
       else { motionCountRef.current = 0; }
@@ -308,6 +317,14 @@ export default function Home() {
       }
     }, 150);
   }, [detectMotion, stopMotionDetection]);
+
+  // ----------------------------------------------------------
+  // Clip recording (video highlights)
+  // ----------------------------------------------------------
+  const startClip = useCallback(() => {
+    if (!clipRecorderRef.current) clipRecorderRef.current = new ClipRecorder();
+    if (streamRef.current) clipRecorderRef.current.start(streamRef.current);
+  }, []);
 
   // ----------------------------------------------------------
   // Photo capture
@@ -338,17 +355,31 @@ export default function Home() {
   // ----------------------------------------------------------
   const handleActionEnd = useCallback(async () => {
     stopMotionDetection();
+    const clip = await (clipRecorderRef.current?.stop() ?? Promise.resolve(null));
     if (hintTimerRef.current) { clearTimeout(hintTimerRef.current); hintTimerRef.current = null; }
     setShowHint(false);
 
     const seq = sequenceRef.current;
     const idx = actionIndexRef.current;
     const action = seq[idx];
-    if (!action) return;
+    if (!action) { if (clip) URL.revokeObjectURL(clip.url); return; }
 
     const wasSimonSays = action.simonSays;
     const hadMotion = motionDetectedRef.current;
     const correct = wasSimonSays ? hadMotion : !hadMotion;
+
+    // Keep video clips of correct performed actions (the funny ones), cap 12
+    if (correct && wasSimonSays && clip && capturedClipsRef.current.length < 12) {
+      const newClip: CapturedClip = {
+        url: clip.url, mimeType: clip.mimeType,
+        pokemonName: action.pokemon.name, pokemonEmoji: action.pokemon.emoji,
+        action: action.pokemon.action, pokemonType: action.pokemon.type,
+      };
+      capturedClipsRef.current = [...capturedClipsRef.current, newClip];
+      setCapturedClips(capturedClipsRef.current);
+    } else if (clip) {
+      URL.revokeObjectURL(clip.url);
+    }
 
     if (correct) {
       // Score
@@ -416,6 +447,7 @@ export default function Home() {
           previousFrameRef.current = null;
           setTimeLeft(currentTimerRef.current);
           startMotionDetection();
+          startClip();
           // No hints during multi-action (must remember!)
         }, 800);
       } else {
@@ -460,7 +492,7 @@ export default function Home() {
         }, 1000);
       }
     }
-  }, [stopMotionDetection, startMotionDetection, capturePhoto, fireConfetti]);
+  }, [stopMotionDetection, startMotionDetection, startClip, capturePhoto, fireConfetti]);
 
   // ----------------------------------------------------------
   // Build and start a new sequence
@@ -565,6 +597,7 @@ export default function Home() {
         simonSaysRef.current = seq[0].simonSays;
         setTimeLeft(currentTimerRef.current);
         startMotionDetection();
+        startClip();
         setGameState('playing');
 
         // Hints only for single-action sequences
@@ -581,7 +614,7 @@ export default function Home() {
 
     return () => { aborted = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gameState, watchIndex, startMotionDetection]);
+  }, [gameState, watchIndex, startMotionDetection, startClip]);
 
   // ----------------------------------------------------------
   // Timer tick (playing only)
@@ -635,6 +668,9 @@ export default function Home() {
     setBestStreak(0); bestStreakRef.current = 0;
     setSequence([]); sequenceRef.current = [];
     setCapturedPoses([]);
+    revokeClips(capturedClipsRef.current);
+    capturedClipsRef.current = [];
+    setCapturedClips([]);
     setLatestPose(null);
     setNewCatches([]);
     setIsNewHighScore(false);
@@ -660,6 +696,7 @@ export default function Home() {
   const handleSkip = () => {
     sounds.click();
     stopMotionDetection();
+    clipRecorderRef.current?.discard();
     if (hintTimerRef.current) { clearTimeout(hintTimerRef.current); hintTimerRef.current = null; }
     setShowHint(false);
     setGameState('between');
@@ -672,6 +709,7 @@ export default function Home() {
   useEffect(() => {
     return () => {
       stopMotionDetection();
+      clipRecorderRef.current?.discard();
       if (hintTimerRef.current) clearTimeout(hintTimerRef.current);
       if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
     };
@@ -906,8 +944,37 @@ export default function Home() {
               </div>
             )}
 
+            {/* Mystery card — Master mode hides the command while performing */}
+            {gameState === 'playing' && !config.showCardDuringPlay && displayPokemon && (
+              <motion.div
+                key={`mystery-${displayIdx}`}
+                initial={{ y: -20, opacity: 0 }}
+                animate={{ y: 0, opacity: 1 }}
+                className="rounded-2xl p-3 shadow-lg mb-2 bg-purple-900/95 border-2 border-purple-400"
+              >
+                <div className="flex items-center gap-3">
+                  <motion.div
+                    className="w-16 h-16 flex-shrink-0 flex items-center justify-center text-4xl"
+                    animate={{ rotate: [0, -8, 8, 0] }}
+                    transition={{ duration: 1.2, repeat: Infinity }}
+                  >
+                    ❓
+                  </motion.div>
+                  <div className="flex-1 min-w-0">
+                    {isMultiAction && (
+                      <div className="text-xs font-black text-purple-300">
+                        PERFORM {actionIndex + 1} of {sequence.length}
+                      </div>
+                    )}
+                    <div className="text-xl font-black text-white leading-tight">FROM MEMORY!</div>
+                    <div className="text-sm font-bold text-purple-300">What did Simon say?</div>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+
             {/* Command card */}
-            {(gameState === 'playing' || gameState === 'watching') && displayPokemon && (
+            {(gameState === 'watching' || (gameState === 'playing' && config.showCardDuringPlay)) && displayPokemon && (
               <motion.div
                 key={`${displayPokemon.id}-${displayIdx}`}
                 initial={{ y: -20, opacity: 0 }}
@@ -1017,6 +1084,7 @@ export default function Home() {
             round={round}
             streak={bestStreak}
             capturedPoses={capturedPoses}
+            capturedClips={capturedClips}
             newCatches={newCatches}
             isNewHighScore={isNewHighScore}
             onPlayAgain={() => startGame(difficulty)}

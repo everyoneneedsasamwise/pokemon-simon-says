@@ -56,7 +56,7 @@ export default function TitleScreen({ onStart, onOpenPokedex }: TitleScreenProps
       {/* Difficulty selector */}
       <div className="bg-white/20 backdrop-blur rounded-2xl p-3 mb-4">
         <p className="text-white font-bold text-sm mb-2">DIFFICULTY</p>
-        <div className="flex gap-2 justify-center">
+        <div className="flex gap-2 justify-center flex-wrap">
           {(Object.keys(DIFFICULTY_CONFIGS) as Difficulty[]).map((d) => {
             const c = DIFFICULTY_CONFIGS[d];
             const active = d === selectedDifficulty;
@@ -65,7 +65,7 @@ export default function TitleScreen({ onStart, onOpenPokedex }: TitleScreenProps
                 key={d}
                 whileTap={{ scale: 0.95 }}
                 onClick={() => { sounds.click(); setSelectedDifficulty(d); }}
-                className="px-4 py-2 rounded-xl font-black text-sm transition-all"
+                className="px-3 py-2 rounded-xl font-black text-sm transition-all"
                 style={{
                   backgroundColor: active ? c.color : 'rgba(255,255,255,0.15)',
                   color: active ? 'white' : 'rgba(255,255,255,0.7)',
@@ -80,6 +80,7 @@ export default function TitleScreen({ onStart, onOpenPokedex }: TitleScreenProps
         <div className="text-white/70 text-xs mt-2">
           {config.lives} lives &bull; {config.timer}s timer
           {config.hintDelay === Infinity ? ' \u00b7 No hints!' : ''}
+          {!config.showCardDuringPlay ? ' \u00b7 MEMORY ONLY \u2014 no card while you play!' : ''}
         </div>
       </div>
 
