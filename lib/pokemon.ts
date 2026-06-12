@@ -7,7 +7,7 @@ export type PokemonType =
   | 'fighting' | 'ghost' | 'poison' | 'flying' | 'rock'
   | 'grass' | 'dragon' | 'ice';
 
-export type Difficulty = 'easy' | 'normal' | 'hard';
+export type Difficulty = 'easy' | 'normal' | 'hard' | 'master';
 
 export interface PokemonAction {
   id: number;
@@ -37,6 +37,7 @@ export interface DifficultyConfig {
   lives: number;
   bossEvery: number;
   hintDelay: number; // seconds before trick hint shows (Infinity = never)
+  showCardDuringPlay: boolean; // false = memory only, no command card while performing
 }
 
 export interface StreakBonus {
@@ -120,6 +121,7 @@ export const DIFFICULTY_CONFIGS: Record<Difficulty, DifficultyConfig> = {
     lives: 5,
     bossEvery: 8,
     hintDelay: 0,       // hints shown immediately
+    showCardDuringPlay: true,
   },
   normal: {
     label: 'Normal',
@@ -133,6 +135,7 @@ export const DIFFICULTY_CONFIGS: Record<Difficulty, DifficultyConfig> = {
     lives: 3,
     bossEvery: 10,
     hintDelay: 2,       // hints after 2 seconds
+    showCardDuringPlay: true,
   },
   hard: {
     label: 'Hard',
@@ -146,6 +149,21 @@ export const DIFFICULTY_CONFIGS: Record<Difficulty, DifficultyConfig> = {
     lives: 3,
     bossEvery: 10,
     hintDelay: Infinity, // no hints, listen only
+    showCardDuringPlay: true,
+  },
+  master: {
+    label: 'Master',
+    emoji: '🟣',
+    color: '#9333ea',
+    timer: 3.5,
+    minTimer: 1.8,
+    trickChance: 0.45,
+    speedIncreaseEvery: 3,
+    speedDecrease: 0.4,
+    lives: 2,
+    bossEvery: 7,
+    hintDelay: Infinity,
+    showCardDuringPlay: false, // pure memory — card hidden while performing
   },
 };
 
@@ -209,7 +227,7 @@ export function getSequenceLength(round: number, difficulty: Difficulty): number
 // Speech rate — voice gets faster with rounds
 // ----------------------------------------------------------
 export function getSpeechRate(round: number, difficulty: Difficulty): number {
-  const base = difficulty === 'easy' ? 1.0 : difficulty === 'normal' ? 1.1 : 1.2;
-  const inc  = difficulty === 'easy' ? 0.025 : difficulty === 'normal' ? 0.035 : 0.045;
+  const base = difficulty === 'easy' ? 1.0 : difficulty === 'normal' ? 1.1 : difficulty === 'hard' ? 1.2 : 1.3;
+  const inc  = difficulty === 'easy' ? 0.025 : difficulty === 'normal' ? 0.035 : difficulty === 'hard' ? 0.045 : 0.055;
   return Math.min(2.2, base + (round - 1) * inc);
 }
